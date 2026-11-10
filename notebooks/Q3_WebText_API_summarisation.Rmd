@@ -1,0 +1,258 @@
+---
+title: "Question 3 - WebText API Proof of Concept: Scrape, Preprocess, Summarise"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 9, fig.height = 6)
+```
+
+## Packages
+
+```{r packages}
+# install.packages(c("tidyverse","tidytext","rvest","httr","robotstxt","xml2","textstem","igraph","wordcloud","RColorBrewer"))
+library(tidyverse)
+library(tidytext)
+library(rvest)
+library(httr)
+library(robotstxt)
+library(xml2)
+library(textstem)
+library(igraph)
+library(wordcloud)
+library(RColorBrewer)
+set.seed(42)
+```
+
+## 3.1 Extract web content into an R data structure
+
+### Site chosen and fair-use compliance
+
+I selected the Eurac Research science blog (the article "Can language become environmental data?"), because the site states that its content is licensed under Creative Commons Attribution 4.0, which permits reuse with attribution. Fair-use / ethical scraping measures applied:
+
+1. `robots.txt` is checked programmatically before any request.
+2. A descriptive User-Agent is sent.
+3. Requests are rate-limited (2 seconds apart) and only a handful of public pages are fetched.
+4. Only public article text is collected, no personal data, for educational use, and the source is credited (Eurac Research, CC BY 4.0).
+
+```{r config}
+START_URL     <- "https://www.eurac.edu/en/blogs/connecting-the-dots/can-language-become-environmental-data"
+DISCOVER_MORE <- TRUE     # also scrape a few sibling blog posts for a richer corpus
+MAX_EXTRA     <- 4
+UA <- user_agent("ITBDA4-14 student coursework (text mining proof of concept)")
+
+# robots.txt check
+paths_allowed(START_URL, user_agent = "*")
+```
+
+If `paths_allowed()` returns `FALSE`, stop and choose another site.
+
+```{r scrape}
+scrape_page <- function(url) {
+  Sys.sleep(2)                                   # polite delay
+  resp <- GET(url, UA, timeout(20))
+  stop_for_status(resp)
+  page <- read_html(content(resp, "text", encoding = "UTF-8"))
+
+  title <- page |> html_element("h1") |> html_text2()
+
+  # try progressively broader selectors for the article body
+  paras <- page |> html_elements("article p") |> html_text2()
+  if (length(paras) < 3) paras <- page |> html_elements("main p") |> html_text2()
+  if (length(paras) < 3) paras <- page |> html_elements("p") |> html_text2()
+
+  tibble(url = url, title = title, para_id = seq_along(paras), text = paras)
+}
+
+urls <- START_URL
+
+if (DISCOVER_MORE) {
+  home <- read_html(content(GET(START_URL, UA), "text", encoding = "UTF-8"))
+  more <- home |> html_elements("a") |> html_attr("href") |>
+    url_absolute(START_URL) |>
+    unique() |>
+    keep(~ str_detect(.x, "/blogs/connecting-the-dots/") && .x != START_URL) |>
+    head(MAX_EXTRA)
+  urls <- c(urls, more)
+}
+
+raw_web <- map_dfr(urls, possibly(scrape_page, otherwise = NULL))
+glimpse(raw_web)
+raw_web |> count(title)
+```
+
+`raw_web` (one row per paragraph: `url`, `title`, `para_id`, `text`) is the R data structure used from here on.
+
+## 3.2 Textual preprocessing
+
+Steps: remove empty/very short paragraphs, remove site boilerplate (navigation, cookie, newsletter, social/footer text), remove duplicates, strip HTML remnants, URLs and e-mails, lower-case, remove digits and punctuation, remove stop words and short tokens, lemmatise.
+
+```{r clean}
+boilerplate <- regex(
+  "cookie|newsletter|subscribe|follow us|share|privacy|imprint|work with us|get directions|creative commons|licensed under|access work|choose language|all rights reserved",
+  ignore_case = TRUE)
+
+web_clean <- raw_web |>
+  mutate(text = str_squish(text)) |>
+  filter(nchar(text) > 40,                          # drop menu items / captions
+         !str_detect(text, boilerplate)) |>         # drop boilerplate
+  distinct(text, .keep_all = TRUE)                  # drop duplicates
+
+clean_text <- function(x) {
+  x |>
+    str_replace_all("<[^>]+>", " ") |>
+    str_replace_all("http\\S+|www\\.\\S+", " ") |>
+    str_replace_all("\\S+@\\S+", " ") |>
+    str_to_lower() |>
+    str_replace_all("[^a-z\\s]", " ") |>
+    str_squish()
+}
+
+extra_stop <- c("also","can","may","might","one","two","use","used","using","like","et","al")
+
+tokens <- web_clean |>
+  mutate(clean = clean_text(text)) |>
+  unnest_tokens(word, clean) |>
+  filter(!word %in% stop_words$word, !word %in% extra_stop, nchar(word) > 2) |>
+  mutate(word = lemmatize_words(word)) |>
+  filter(!word %in% stop_words$word)
+
+cat("Paragraphs kept:", nrow(web_clean), "of", nrow(raw_web), "\n")
+cat("Tokens:", nrow(tokens), " Unique terms:", n_distinct(tokens$word), "\n")
+head(tokens)
+```
+
+## 3.3 Text summarisation
+
+Two extractive techniques are applied at sentence level:
+
+* **Method 1 - Word-frequency scoring (Luhn style):** a sentence scores the sum of the normalised frequencies of its content words, divided by the square root of its length so long sentences are not favoured unfairly.
+* **Method 2 - TextRank:** sentences are nodes in a graph, edges are TF-IDF cosine similarities, and PageRank identifies the most central sentences.
+
+```{r sentences}
+sentences <- web_clean |>
+  select(url, title, text) |>
+  unnest_tokens(sentence, text, token = "sentences", to_lower = FALSE) |>
+  filter(nchar(sentence) > 40) |>
+  mutate(sent_id = row_number())
+
+sent_tokens <- sentences |>
+  mutate(clean = clean_text(sentence)) |>
+  select(sent_id, clean) |>
+  unnest_tokens(word, clean) |>
+  filter(!word %in% stop_words$word, !word %in% extra_stop, nchar(word) > 2) |>
+  mutate(word = lemmatize_words(word))
+
+N_SUM <- 5   # sentences in each summary
+cat("Sentences:", nrow(sentences), "\n")
+```
+
+### Method 1: word-frequency scoring
+
+```{r method1}
+word_w <- sent_tokens |> count(word, name = "n") |> mutate(w = n / max(n))
+
+score_freq <- sent_tokens |>
+  left_join(word_w, by = "word") |>
+  group_by(sent_id) |>
+  summarise(score = sum(w) / sqrt(n()), .groups = "drop") |>
+  mutate(method = "Word frequency")
+
+summary_freq <- score_freq |>
+  slice_max(score, n = N_SUM, with_ties = FALSE) |>
+  arrange(sent_id) |>
+  left_join(sentences, by = "sent_id")
+
+summary_freq$sentence
+```
+
+### Method 2: TextRank
+
+```{r method2}
+tfidf <- sent_tokens |>
+  count(sent_id, word) |>
+  bind_tf_idf(word, sent_id, n)
+
+m <- tfidf |> cast_sparse(sent_id, word, tf_idf) |> as.matrix()
+m <- m / pmax(sqrt(rowSums(m^2)), 1e-9)            # unit-length rows -> cosine
+sim <- m %*% t(m)
+diag(sim) <- 0
+
+g  <- graph_from_adjacency_matrix(sim, mode = "undirected", weighted = TRUE)
+pr <- page_rank(g)$vector
+
+score_tr <- tibble(sent_id = as.integer(names(pr)), score = pr, method = "TextRank")
+
+summary_tr <- score_tr |>
+  slice_max(score, n = N_SUM, with_ties = FALSE) |>
+  arrange(sent_id) |>
+  left_join(sentences, by = "sent_id")
+
+summary_tr$sentence
+```
+
+Agreement between the two summaries:
+
+```{r overlap}
+shared <- intersect(summary_freq$sent_id, summary_tr$sent_id)
+cat("Sentences chosen by both methods:", length(shared), "of", N_SUM, "\n")
+```
+
+## Visualisations
+
+**Visualisation 1 - most frequent content words**
+
+```{r vis1}
+tokens |>
+  count(word, sort = TRUE) |>
+  slice_max(n, n = 15, with_ties = FALSE) |>
+  ggplot(aes(n, reorder(word, n))) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Top 15 content words after preprocessing",
+       subtitle = "Source: Eurac Research blog (CC BY 4.0)",
+       x = "Frequency", y = "Word")
+```
+
+**Visualisation 2 - word cloud**
+
+```{r vis2}
+wc <- count(tokens, word, sort = TRUE)
+wordcloud(wc$word, wc$n, max.words = 80, scale = c(3.5, 0.6),
+          colors = brewer.pal(8, "Dark2"), random.order = FALSE)
+```
+
+**Visualisation 3 - sentence scores selected by each summarisation method**
+
+```{r vis3}
+bind_rows(score_freq, score_tr) |>
+  group_by(method) |>
+  mutate(score = score / max(score)) |>          # put both methods on a 0-1 scale
+  slice_max(score, n = 10, with_ties = FALSE) |>
+  ungroup() |>
+  mutate(sent_id = reorder_within(factor(sent_id), score, method)) |>
+  ggplot(aes(score, sent_id, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ method, scales = "free_y") +
+  scale_y_reordered() +
+  labs(title = "Top 10 ranked sentences per summarisation method",
+       x = "Normalised sentence score", y = "Sentence ID")
+```
+
+**Visualisation 4 (bonus) - sentence similarity network (TextRank graph)**
+
+```{r vis4}
+keep <- which(strength(g) > quantile(strength(g), 0.5))
+g_small <- induced_subgraph(g, keep)
+E(g_small)$weight[E(g_small)$weight < 0.1] <- 0
+g_small <- delete_edges(g_small, E(g_small)[weight == 0])
+plot(g_small, vertex.size = 5 + 60 * pr[V(g_small)$name], vertex.label = NA,
+     edge.width = 3 * E(g_small)$weight, vertex.color = "orange",
+     main = "Sentence similarity network (node size = TextRank score)")
+```
+
+## Findings (write in your own words)
+
+* Which words dominate the corpus and what does that say about the article's theme?
+* Compare the two summaries: where do they agree and differ (see overlap count)? Frequency scoring favours sentences full of the most common words, TextRank favours sentences that are semantically central.
+* Limitations: small corpus, extractive only (no new sentences), lemmatisation errors, selector-dependent scraping.
+* For the "WebText API" proof of concept, wrap steps 3.1-3.3 into functions that take a URL and return the summary and top terms.

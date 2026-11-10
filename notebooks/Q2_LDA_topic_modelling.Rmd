@@ -1,0 +1,184 @@
+---
+title: "Question 2 - LDA Topic Modelling of News Articles"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 9, fig.height = 6)
+```
+
+## Packages and parameters
+
+```{r packages}
+# install.packages(c("tidyverse","tidytext","topicmodels","textstem","wordcloud","RColorBrewer","reshape2","ldatuning"))
+library(tidyverse)
+library(tidytext)
+library(topicmodels)
+library(textstem)
+library(wordcloud)
+library(RColorBrewer)
+
+N_TOPICS <- 5     # n: number of topics
+K_WORDS  <- 10    # k: top words shown per topic
+set.seed(1234)
+```
+
+## 2.1 Load the news files into a data frame and denoise
+
+```{r load}
+zip_path <- "news.zip"                 # place news.zip next to this notebook
+unzip(zip_path, exdir = "news_raw")
+
+files <- list.files("news_raw", pattern = "\\.txt$", recursive = TRUE, full.names = TRUE)
+
+news_df <- tibble(
+  file_name = basename(files),
+  content   = map_chr(files, ~ paste(readLines(.x, warn = FALSE, encoding = "UTF-8"), collapse = " "))
+)
+
+glimpse(news_df)
+```
+
+Denoising steps: strip HTML tags and URLs, lower-case, remove digits and punctuation, collapse whitespace, remove stop words and very short tokens, lemmatise.
+
+```{r clean}
+clean_text <- function(x) {
+  x |>
+    str_replace_all("<[^>]+>", " ") |>           # HTML
+    str_replace_all("http\\S+|www\\.\\S+", " ") |> # URLs
+    str_replace_all("\\S+@\\S+", " ") |>         # e-mails
+    str_to_lower() |>
+    str_replace_all("[^a-z\\s]", " ") |>         # punctuation, digits, symbols
+    str_squish()
+}
+
+news_df <- news_df |> mutate(clean = clean_text(content))
+
+extra_stop <- c("said","say","says","will","also","would","could","one","two","new","year","years","mr","mrs")
+
+tokens <- news_df |>
+  select(file_name, clean) |>
+  unnest_tokens(word, clean) |>
+  filter(!word %in% stop_words$word,
+         !word %in% extra_stop,
+         nchar(word) > 2) |>
+  mutate(word = lemmatize_words(word))
+
+# lemmatising can reintroduce stop words, so filter again
+tokens <- tokens |> filter(!word %in% stop_words$word)
+
+# remove very rare words (< 3 occurrences overall)
+tokens <- tokens |> group_by(word) |> filter(n() >= 3) |> ungroup()
+
+# preprocessed data frame (file_name, content)
+news_clean <- tokens |>
+  group_by(file_name) |>
+  summarise(content = paste(word, collapse = " "), .groups = "drop")
+
+head(news_clean)
+cat("Documents:", nrow(news_clean), " Vocabulary:", n_distinct(tokens$word), "\n")
+```
+
+## 2.2 LDA
+
+Document-term matrix and model:
+
+```{r lda}
+dtm <- tokens |>
+  count(file_name, word) |>
+  cast_dtm(file_name, word, n)
+
+lda_model <- LDA(dtm, k = N_TOPICS, method = "Gibbs",
+                 control = list(seed = 1234, burnin = 500, iter = 2000))
+```
+
+Top k words per topic (beta = probability of the word given the topic, i.e. the word distribution):
+
+```{r topwords}
+topic_words <- tidy(lda_model, matrix = "beta")
+
+top_terms <- topic_words |>
+  group_by(topic) |>
+  slice_max(beta, n = K_WORDS, with_ties = FALSE) |>
+  ungroup() |>
+  arrange(topic, desc(beta))
+
+top_terms
+
+# compact list view
+top_terms |>
+  group_by(topic) |>
+  summarise(top_words = paste(term, collapse = ", "))
+```
+
+Word distribution reporting: how concentrated each topic is, and how topics spread over documents.
+
+```{r dist}
+# share of each topic's probability mass held by its top k words
+topic_words |>
+  group_by(topic) |>
+  arrange(desc(beta), .by_group = TRUE) |>
+  summarise(top_k_mass = sum(head(beta, K_WORDS)), vocab = n())
+
+# document-topic distribution (gamma) and dominant topic per document
+doc_topics <- tidy(lda_model, matrix = "gamma")
+
+dominant <- doc_topics |>
+  group_by(document) |>
+  slice_max(gamma, n = 1, with_ties = FALSE) |>
+  ungroup()
+
+count(dominant, topic, name = "documents")
+```
+
+(Optional) choosing n with coherence-style metrics:
+
+```{r choose-n, eval=FALSE}
+library(ldatuning)
+res <- FindTopicsNumber(dtm, topics = seq(2, 12, 2),
+        metrics = c("Griffiths2004","CaoJuan2009","Arun2010","Deveaud2014"),
+        method = "Gibbs", control = list(seed = 1234), mc.cores = 2L)
+FindTopicsNumber_plot(res)
+```
+
+## 2.3 Visualisation
+
+**Method 1 - faceted bar chart of top words per topic**
+
+```{r bars}
+top_terms |>
+  mutate(term = reorder_within(term, beta, topic)) |>
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ paste("Topic", topic), scales = "free_y") +
+  scale_y_reordered() +
+  labs(title = "Top words per topic (LDA)",
+       x = "Word probability within topic (beta)", y = "Word")
+```
+
+**Method 2 - word clouds per topic**
+
+```{r clouds, fig.height=8}
+par(mfrow = c(ceiling(N_TOPICS / 2), 2), mar = c(0, 0, 2, 0))
+for (t in seq_len(N_TOPICS)) {
+  d <- filter(top_terms, topic == t)
+  wordcloud(d$term, d$beta, scale = c(3, 0.6), min.freq = 0,
+            colors = brewer.pal(8, "Dark2"), random.order = FALSE)
+  title(paste("Topic", t))
+}
+par(mfrow = c(1, 1))
+```
+
+**Method 3 (bonus) - document-topic heatmap**
+
+```{r heat}
+ggplot(doc_topics, aes(factor(topic), document, fill = gamma)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  labs(title = "Topic proportions per document", x = "Topic", y = "Document", fill = "Gamma") +
+  theme(axis.text.y = element_blank())
+```
+
+## Interpretation
+
+Write 1-2 sentences per topic naming it from its top words (e.g. "Topic 1: politics and elections"), comment on how concentrated each topic is (top_k_mass), and on how many documents each topic dominates.

@@ -1,0 +1,169 @@
+---
+title: "Question 4 - ETL with R and PostgreSQL: Online Bookstore Pricing and Ratings"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 9, fig.height = 5)
+```
+
+## Use case
+
+**Question:** how do book price, star rating and stock level vary across categories in an online bookstore, and which titles are the best value (high rating, low price)?
+
+The target is `books.toscrape.com`, a public sandbox site built for scraping practice. Scraping is polite: robots.txt is checked, a descriptive User-Agent is sent and requests are 1.5 seconds apart.
+
+```{r packages}
+# install.packages(c("tidyverse","rvest","httr","robotstxt","xml2"))
+library(tidyverse)
+library(rvest)
+library(httr)
+library(robotstxt)
+library(xml2)
+dir.create("../data", showWarnings = FALSE)
+UA <- user_agent("ITBDA4-14 student coursework (ETL demonstration)")
+paths_allowed("https://books.toscrape.com/catalogue/page-1.html")
+```
+
+## 4.1 Extract: scrape at least 20 unstructured records
+
+Each record combines listing-page fields (title, raw price string, star-rating CSS class, availability sentence) with detail-page fields (category, free-text description, product table). The raw values are intentionally kept as scraped.
+
+```{r scrape}
+get_html <- function(url) {
+  Sys.sleep(1.5)
+  resp <- GET(url, UA, timeout(20))
+  stop_for_status(resp)
+  read_html(content(resp, "text", encoding = "UTF-8"))
+}
+
+scrape_listing <- function(page_no) {
+  url  <- sprintf("https://books.toscrape.com/catalogue/page-%d.html", page_no)
+  page <- get_html(url)
+  cards <- page |> html_elements("article.product_pod")
+  tibble(
+    title        = cards |> html_element("h3 a") |> html_attr("title"),
+    price_raw    = cards |> html_element(".price_color") |> html_text(),
+    rating_raw   = cards |> html_element("p.star-rating") |> html_attr("class"),
+    avail_raw    = cards |> html_element(".availability") |> html_text(),
+    detail_url   = cards |> html_element("h3 a") |> html_attr("href") |> url_absolute(url)
+  )
+}
+
+scrape_detail <- function(url) {
+  page <- get_html(url)
+  tbl  <- page |> html_element("table.table-striped") |> html_table(header = FALSE)
+  get_row <- function(label) tbl$X2[match(label, tbl$X1)]
+  tibble(
+    detail_url  = url,
+    category    = page |> html_elements(".breadcrumb li a") |> html_text2() |> nth(3),
+    description = page |> html_element("#product_description + p") |> html_text2(),
+    upc         = get_row("UPC"),
+    price_excl_raw = get_row("Price (excl. tax)"),
+    n_reviews_raw  = get_row("Number of reviews")
+  )
+}
+
+listing <- map_dfr(1:2, scrape_listing)                      # 2 pages = 40 books
+details <- map_dfr(listing$detail_url, possibly(scrape_detail, otherwise = NULL))
+
+raw_books <- left_join(listing, details, by = "detail_url")
+write_csv(raw_books, "../data/raw_books.csv")
+
+cat("Records scraped:", nrow(raw_books), "\n")
+glimpse(raw_books)
+```
+
+Examples of real-world mess in the raw data (inspect these in your report):
+
+```{r mess}
+raw_books |> count(rating_raw)                     # rating hidden in a CSS class name
+raw_books |> select(price_raw, avail_raw) |> head(5)   # currency symbol / encoding, sentence-style stock
+raw_books |> summarise(missing_description = sum(is.na(description) | description == ""))
+```
+
+## 4.2 Transform: cleaning, denoising and imputation
+
+```{r clean}
+rating_levels <- c("One","Two","Three","Four","Five")
+
+books <- raw_books |>
+  mutate(
+    title = str_squish(title),
+    # price: keep digits only (removes the pound sign and mis-encoded characters such as "Â£")
+    price_gbp = as.numeric(str_extract(price_raw, "\\d+\\.\\d{2}")),
+    # rating: regex on the CSS class, then word -> number
+    rating = match(str_extract(rating_raw, "One|Two|Three|Four|Five"), rating_levels),
+    # stock: number inside brackets "In stock (22 available)"
+    stock = as.integer(str_extract(avail_raw, "(?<=\\()\\d+")),
+    in_stock = str_detect(avail_raw, regex("in stock", ignore_case = TRUE)),
+    # description denoising: HTML tags, non-ASCII debris, repeated whitespace
+    description = description |>
+      str_remove_all("<[^>]+>") |>
+      str_replace_all("[^\\x20-\\x7E]", " ") |>
+      str_squish(),
+    description = na_if(description, ""),
+    # inferred numeric attributes from text via regex
+    desc_words     = str_count(description, "\\b\\w+\\b"),
+    mentioned_year = as.integer(str_extract(description, "\\b(1[5-9]\\d{2}|20[0-2]\\d)\\b")),
+    category = str_squish(category)
+  ) |>
+  distinct(upc, .keep_all = TRUE)                  # remove duplicate products
+```
+
+Missing-value imputation (numeric: category median, then overall median; text: explicit placeholder). Imputed rows are flagged so the analysis stays honest.
+
+```{r impute}
+impute_median <- function(x, g) {
+  ifelse(is.na(x), ave(x, g, FUN = function(v) median(v, na.rm = TRUE)), x)
+}
+
+books <- books |>
+  mutate(
+    price_imputed = is.na(price_gbp),
+    price_gbp = impute_median(price_gbp, category),
+    price_gbp = ifelse(is.na(price_gbp), median(price_gbp, na.rm = TRUE), price_gbp),
+    rating    = ifelse(is.na(rating), round(median(rating, na.rm = TRUE)), rating),
+    stock     = ifelse(is.na(stock), round(median(stock, na.rm = TRUE)), stock),
+    desc_missing = is.na(description),
+    description  = replace_na(description, "No description available"),
+    desc_words   = ifelse(desc_missing, 0L, desc_words)
+  )
+
+# outlier check on price (IQR rule) - reported, not removed
+q <- quantile(books$price_gbp, c(.25, .75))
+books |> filter(price_gbp > q[2] + 1.5 * diff(q) | price_gbp < q[1] - 1.5 * diff(q)) |>
+  select(title, price_gbp)
+
+clean_books <- books |>
+  select(upc, title, category, price_gbp, rating, stock, in_stock,
+         desc_words, mentioned_year, description, detail_url)
+
+colSums(is.na(clean_books))
+write_csv(clean_books, "../data/clean_books.csv", na = "")
+```
+
+Before/after summary to include in the report:
+
+```{r beforeafter}
+tibble(
+  step = c("Raw", "Clean"),
+  rows = c(nrow(raw_books), nrow(clean_books)),
+  missing_cells = c(sum(is.na(raw_books)), sum(is.na(clean_books)))
+)
+```
+
+## 4.3 Load: PostgreSQL
+
+Run the SQL in `sql/q4_postgres.sql` (table creation, `\copy` import and two analytical queries). Paste each query result and a short interpretation into the report.
+
+Optional R check that the load worked:
+
+```{r dbcheck, eval=FALSE}
+# install.packages(c("DBI","RPostgres"))
+library(DBI)
+con <- dbConnect(RPostgres::Postgres(), dbname = "bookstore", host = "localhost",
+                 port = 5432, user = "postgres", password = Sys.getenv("PGPASSWORD"))
+dbGetQuery(con, "SELECT COUNT(*) FROM books;")
+dbDisconnect(con)
+```
