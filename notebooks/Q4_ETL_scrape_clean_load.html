@@ -408,6 +408,7 @@ scrape_detail &lt;- function(url) {
     category    = page |&gt; html_elements(&quot;.breadcrumb li a&quot;) |&gt; html_text2() |&gt; nth(3),
     description = page |&gt; html_element(&quot;#product_description + p&quot;) |&gt; html_text2(),
     upc         = get_row(&quot;UPC&quot;),
+    avail_detail   = get_row(&quot;Availability&quot;),
     price_excl_raw = get_row(&quot;Price (excl. tax)&quot;),
     n_reviews_raw  = get_row(&quot;Number of reviews&quot;)
   )
@@ -423,7 +424,7 @@ cat(&quot;Records scraped:&quot;, nrow(raw_books), &quot;\n&quot;)</code></pre>
 <pre><code>## Records scraped: 40</code></pre>
 <pre class="r"><code>glimpse(raw_books)</code></pre>
 <pre><code>## Rows: 40
-## Columns: 10
+## Columns: 11
 ## $ title          &lt;chr&gt; &quot;A Light in the Attic&quot;, &quot;Tipping the Velvet&quot;, &quot;Soumissi…
 ## $ price_raw      &lt;chr&gt; &quot;£51.77&quot;, &quot;£53.74&quot;, &quot;£50.10&quot;, &quot;£47.82&quot;, &quot;£54.23&quot;, &quot;£22.…
 ## $ rating_raw     &lt;chr&gt; &quot;star-rating Three&quot;, &quot;star-rating One&quot;, &quot;star-rating On…
@@ -432,6 +433,7 @@ cat(&quot;Records scraped:&quot;, nrow(raw_books), &quot;\n&quot;)</code></pre>
 ## $ category       &lt;chr&gt; &quot;Poetry&quot;, &quot;Historical Fiction&quot;, &quot;Fiction&quot;, &quot;Mystery&quot;, &quot;…
 ## $ description    &lt;chr&gt; &quot;It&#39;s hard to imagine a world without A Light in the At…
 ## $ upc            &lt;chr&gt; &quot;a897fe39b1053632&quot;, &quot;90fa61229261140a&quot;, &quot;6957f44c3847a7…
+## $ avail_detail   &lt;chr&gt; &quot;In stock (22 available)&quot;, &quot;In stock (20 available)&quot;, &quot;…
 ## $ price_excl_raw &lt;chr&gt; &quot;£51.77&quot;, &quot;£53.74&quot;, &quot;£50.10&quot;, &quot;£47.82&quot;, &quot;£54.23&quot;, &quot;£22.…
 ## $ n_reviews_raw  &lt;chr&gt; &quot;0&quot;, &quot;0&quot;, &quot;0&quot;, &quot;0&quot;, &quot;0&quot;, &quot;0&quot;, &quot;0&quot;, &quot;0&quot;, &quot;0&quot;, &quot;0&quot;, &quot;0&quot;, …</code></pre>
 <p>Examples of real-world mess in the raw data (inspect these in your
@@ -471,9 +473,9 @@ books &lt;- raw_books |&gt;
     price_gbp = as.numeric(str_extract(price_raw, &quot;\\d+\\.\\d{2}&quot;)),
     # rating: regex on the CSS class, then word -&gt; number
     rating = match(str_extract(rating_raw, &quot;One|Two|Three|Four|Five&quot;), rating_levels),
-    # stock: number inside brackets &quot;In stock (22 available)&quot;
-    stock = as.integer(str_extract(avail_raw, &quot;(?&lt;=\\()\\d+&quot;)),
-    in_stock = str_detect(avail_raw, regex(&quot;in stock&quot;, ignore_case = TRUE)),
+    # stock: number inside brackets &quot;In stock (22 available)&quot; - only the detail page gives the count
+    stock = as.integer(str_extract(avail_detail, &quot;(?&lt;=\\()\\d+&quot;)),
+    in_stock = str_detect(avail_detail, regex(&quot;in stock&quot;, ignore_case = TRUE)),
     # description denoising: HTML tags, non-ASCII debris, repeated whitespace
     description = description |&gt;
       str_remove_all(&quot;&lt;[^&gt;]+&gt;&quot;) |&gt;
@@ -519,7 +521,7 @@ colSums(is.na(clean_books))</code></pre>
 <pre><code>##            upc          title       category      price_gbp         rating 
 ##              0              0              0              0              0 
 ##          stock       in_stock     desc_words mentioned_year    description 
-##             40              0              0             30              0 
+##              0              0              0             30              0 
 ##     detail_url 
 ##              0</code></pre>
 <pre class="r"><code>write_csv(clean_books, &quot;../data/clean_books.csv&quot;, na = &quot;&quot;)</code></pre>
@@ -533,7 +535,7 @@ colSums(is.na(clean_books))</code></pre>
 ##   step   rows missing_cells
 ##   &lt;chr&gt; &lt;int&gt;         &lt;int&gt;
 ## 1 Raw      40             0
-## 2 Clean    40            70</code></pre>
+## 2 Clean    40            30</code></pre>
 </div>
 <div id="load-postgresql" class="section level2">
 <h2>4.3 Load: PostgreSQL</h2>

@@ -59,6 +59,7 @@ scrape_detail <- function(url) {
     category    = page |> html_elements(".breadcrumb li a") |> html_text2() |> nth(3),
     description = page |> html_element("#product_description + p") |> html_text2(),
     upc         = get_row("UPC"),
+    avail_detail   = get_row("Availability"),
     price_excl_raw = get_row("Price (excl. tax)"),
     n_reviews_raw  = get_row("Number of reviews")
   )
@@ -94,9 +95,9 @@ books <- raw_books |>
     price_gbp = as.numeric(str_extract(price_raw, "\\d+\\.\\d{2}")),
     # rating: regex on the CSS class, then word -> number
     rating = match(str_extract(rating_raw, "One|Two|Three|Four|Five"), rating_levels),
-    # stock: number inside brackets "In stock (22 available)"
-    stock = as.integer(str_extract(avail_raw, "(?<=\\()\\d+")),
-    in_stock = str_detect(avail_raw, regex("in stock", ignore_case = TRUE)),
+    # stock: number inside brackets "In stock (22 available)" - only the detail page gives the count
+    stock = as.integer(str_extract(avail_detail, "(?<=\\()\\d+")),
+    in_stock = str_detect(avail_detail, regex("in stock", ignore_case = TRUE)),
     # description denoising: HTML tags, non-ASCII debris, repeated whitespace
     description = description |>
       str_remove_all("<[^>]+>") |>
