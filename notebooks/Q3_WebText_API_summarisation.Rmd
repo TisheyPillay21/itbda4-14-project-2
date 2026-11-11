@@ -89,7 +89,7 @@ Steps: remove empty/very short paragraphs, remove site boilerplate (navigation, 
 
 ```{r clean}
 boilerplate <- regex(
-  "cookie|newsletter|subscribe|follow us|share|privacy|imprint|work with us|get directions|creative commons|licensed under|access work|choose language|all rights reserved",
+  "cookie|newsletter|subscribe|follow us|share|privacy|imprint|work with us|get directions|creative commons|licensed under|access work|choose language|all rights reserved|data scientist working",
   ignore_case = TRUE)
 
 web_clean <- raw_web |>
@@ -114,7 +114,8 @@ tokens <- web_clean |>
   mutate(clean = clean_text(text)) |>
   unnest_tokens(word, clean) |>
   filter(!word %in% stop_words$word, !word %in% extra_stop, nchar(word) > 2) |>
-  mutate(word = lemmatize_words(word)) |>
+  mutate(word = lemmatize_words(word),
+         word = if_else(word == "datum", "data", word)) |>
   filter(!word %in% stop_words$word)
 
 cat("Paragraphs kept:", nrow(web_clean), "of", nrow(raw_web), "\n")
@@ -141,7 +142,8 @@ sent_tokens <- sentences |>
   select(sent_id, clean) |>
   unnest_tokens(word, clean) |>
   filter(!word %in% stop_words$word, !word %in% extra_stop, nchar(word) > 2) |>
-  mutate(word = lemmatize_words(word))
+  mutate(word = lemmatize_words(word),
+         word = if_else(word == "datum", "data", word))
 
 N_SUM <- 5   # sentences in each summary
 cat("Sentences:", nrow(sentences), "\n")
@@ -250,9 +252,12 @@ plot(g_small, vertex.size = 5 + 60 * pr[V(g_small)$name], vertex.label = NA,
      main = "Sentence similarity network (node size = TextRank score)")
 ```
 
-## Findings (write in your own words)
+## Findings
 
-* Which words dominate the corpus and what does that say about the article's theme?
-* Compare the two summaries: where do they agree and differ (see overlap count)? Frequency scoring favours sentences full of the most common words, TextRank favours sentences that are semantically central.
-* Limitations: small corpus, extractive only (no new sentences), lemmatisation errors, selector-dependent scraping.
-* For the "WebText API" proof of concept, wrap steps 3.1-3.3 into functions that take a URL and return the summary and top terms.
+Dominant words and theme. After preprocessing, the corpus contained 334 tokens and 209 unique terms from 9 retained paragraphs (27 sentences). The most frequent words were impact (12 occurrences), drought (11), language (10) and environmental (9), followed by information (6), data (5) and water, text, system and capture (4 each). These words show that the article is about using language technologies to extract information about drought impacts from text, treating how people write about environmental change as a data source that complements traditional measurements.
+
+Comparison of the two summaries. The methods agreed on 3 of the 5 sentences. Both selected the sentence about language being “messy, subjective” and rarely a neat source of information, the sentence about combining language technologies with drought assessment to extract when, where and which sectors were affected, and the sentence about analysing a large collection of Italian newspaper articles to build an openly available dataset. These three capture the article’s problem, method and aim, which suggests the article has a clear core message. They differed on two sentences. Word-frequency scoring picked a sentence about the inefficiency of manually reading thousands of articles and another noting that newspaper articles do not simply state a drought’s cause and location, both dense with frequent words such as drought, impact and article. TextRank instead picked two shorter, more general sentences, one on how language captures how environmental change is experienced by society and one on how the texts contain valuable information about how drought affects society. These resemble many other sentences, so they are central in the similarity graph. In my judgement, the frequency summary explains the problem and method more concretely, while TextRank gives a better sense of the article’s overall message. The similarity network (Visualisation 4) supports this: a tightly connected cluster of large nodes sits in the centre, with a few weakly linked sentences at the edges.
+
+Limitations. The corpus is a single short article, so frequencies and graph structure rest on small counts. Both methods are extractive, so they can only copy existing sentences, some of which are long or lose context. Cleaning required judgement: an author byline initially passed the filters and was ranked as an important sentence by both methods until it was removed, and the lemmatiser changed “data” to “datum” until it was corrected. Scraping also depends on the page’s HTML structure, so a layout change could break extraction.
+
+Towards a WebText API. Steps 3.1 to 3.3 can be wrapped into functions such as scrape_url(), clean_text() and summarise_text(), taking a link and returning the cleaned text, the top terms and an N-sentence summary. This is the proof of concept requested and could be deployed as a service (for example with the plumber package), so a user submits a URL and receives the insights.

@@ -88,14 +88,20 @@ dtm <- tokens |>
   count(file_name, word) |>
   cast_dtm(file_name, word, n)
 
-lda_model <- LDA(dtm, k = N_TOPICS, method = "Gibbs",
+lda_model <- topicmodels::LDA(dtm, k = N_TOPICS, method = "Gibbs",
                  control = list(seed = 1234, burnin = 500, iter = 2000))
+class(lda_model)
+
+# posterior distributions (topic-word = beta, document-topic = gamma)
+post <- topicmodels::posterior(lda_model)
 ```
 
 Top k words per topic (beta = probability of the word given the topic, i.e. the word distribution):
 
 ```{r topwords}
-topic_words <- tidy(lda_model, matrix = "beta")
+topic_words <- as_tibble(t(post$terms), rownames = "term") |>
+  pivot_longer(-term, names_to = "topic", values_to = "beta") |>
+  mutate(topic = as.integer(topic))
 
 top_terms <- topic_words |>
   group_by(topic) |>
@@ -121,7 +127,9 @@ topic_words |>
   summarise(top_k_mass = sum(head(beta, K_WORDS)), vocab = n())
 
 # document-topic distribution (gamma) and dominant topic per document
-doc_topics <- tidy(lda_model, matrix = "gamma")
+doc_topics <- as_tibble(post$topics, rownames = "document") |>
+  pivot_longer(-document, names_to = "topic", values_to = "gamma") |>
+  mutate(topic = as.integer(topic))
 
 dominant <- doc_topics |>
   group_by(document) |>
