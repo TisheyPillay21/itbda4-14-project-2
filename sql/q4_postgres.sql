@@ -1,5 +1,4 @@
--- Run from the repository root:  psql -U postgres -d bookstore -f sql/q4_postgres.sql
--- (Create the database first:  CREATE DATABASE bookstore;)
+
 
 DROP TABLE IF EXISTS books;
 
@@ -22,7 +21,7 @@ CREATE TABLE books (
 
 -- Sanity checks
 SELECT COUNT(*) AS rows_loaded FROM books;
-SELECT * FROM books LIMIT 5;
+SELECT upc, title, category, price_gbp, rating, stock, in_stock FROM books LIMIT 5;
 
 -- Investigation 1: how do price and rating differ by category?
 SELECT category,

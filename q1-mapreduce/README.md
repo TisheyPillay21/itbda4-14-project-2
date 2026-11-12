@@ -36,3 +36,11 @@ Optional 4th argument `wholeword` matches only the whole word (so "africans" is 
 
 Local mode without HDFS:
     hadoop jar target/keyword-mapreduce-1.0.jar file:///path/to/docs file:///path/to/out africa
+
+## How it was actually run
+The jar was built with Maven (Java 11) and executed with Hadoop 3.3.6 in local mode on a Linux virtual machine (Google Colab):
+
+    hadoop jar target/keyword-mapreduce-1.0.jar file:///content/docs_in/map_reduce_test_docs file:///content/out africa
+    cat /content/out/part-r-00000
+
+Result for "africa": 22 matches in 4 of the 7 documents (doc1: 3, doc2: 5, doc3: 9, doc5: 5). Screenshots are in `docs/images/`.

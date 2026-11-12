@@ -562,10 +562,38 @@ par(mfrow = c(1, 1))</code></pre>
 </div>
 <div id="interpretation" class="section level2">
 <h2>Interpretation</h2>
-<p>Write 1-2 sentences per topic naming it from its top words
-(e.g. “Topic 1: politics and elections”), comment on how concentrated
-each topic is (top_k_mass), and on how many documents each topic
-dominates.</p>
+<ul>
+<li><strong>Topic 1 (government and coalition politics):</strong>
+dominated by <em>government</em>, <em>coalition</em>,
+<em>administration</em>, <em>power</em> and <em>governance</em>,
+i.e. coverage of how government and coalition arrangements work.</li>
+<li><strong>Topic 2 (public service management and reform):</strong>
+<em>public</em>, <em>PSC</em>, <em>management</em>, <em>service</em>,
+<em>official</em> and <em>reform</em> suggest articles about the Public
+Service Commission and public-sector reform. “South” and “Africa” appear
+because the phrase South Africa is frequent, and <em>gxoyiya</em> is a
+name.</li>
+<li><strong>Topic 3 (police and cold weather):</strong> a mixed topic
+combining <em>police</em> and <em>SANDF</em> with <em>cold</em>,
+<em>weather</em> and <em>Western Cape</em>. It has the lowest
+concentration (its top 10 words hold 32.4% of its probability) and
+dominates the most documents (3).</li>
+<li><strong>Topic 4 (labour, unemployment and education):</strong>
+<em>department</em>, <em>unemployment</em>, <em>labour</em>,
+<em>school</em>, <em>fund</em> and <em>priority</em> point to employment
+and labour department announcements.</li>
+<li><strong>Topic 5 (government payments and Eskom):</strong>
+<em>invoice</em>, <em>pay</em>, <em>payment</em>, <em>service</em> and
+<em>eskom</em> suggest articles about paying invoices and service
+providers; it is the most concentrated topic (top 10 words hold
+52.1%).</li>
+<li><strong>Overall:</strong> with only ten articles each topic
+dominates one to three documents, so the topics are broadly
+interpretable but not very stable. Day and month words
+(<em>tuesday</em>, <em>monday</em>, <em>july</em>) and <em>gov</em> are
+noise that could be added to the stop-word list, and a larger corpus
+would give more reliable topics.</li>
+</ul>
 </div>
 
 

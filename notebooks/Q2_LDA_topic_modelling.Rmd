@@ -189,4 +189,9 @@ ggplot(doc_topics, aes(factor(topic), document, fill = gamma)) +
 
 ## Interpretation
 
-Write 1-2 sentences per topic naming it from its top words (e.g. "Topic 1: politics and elections"), comment on how concentrated each topic is (top_k_mass), and on how many documents each topic dominates.
+* **Topic 1 (government and coalition politics):** dominated by *government*, *coalition*, *administration*, *power* and *governance*, i.e. coverage of how government and coalition arrangements work.
+* **Topic 2 (public service management and reform):** *public*, *PSC*, *management*, *service*, *official* and *reform* suggest articles about the Public Service Commission and public-sector reform. "South" and "Africa" appear because the phrase South Africa is frequent, and *gxoyiya* is a name.
+* **Topic 3 (police and cold weather):** a mixed topic combining *police* and *SANDF* with *cold*, *weather* and *Western Cape*. It has the lowest concentration (its top 10 words hold 32.4% of its probability) and dominates the most documents (3).
+* **Topic 4 (labour, unemployment and education):** *department*, *unemployment*, *labour*, *school*, *fund* and *priority* point to employment and labour department announcements.
+* **Topic 5 (government payments and Eskom):** *invoice*, *pay*, *payment*, *service* and *eskom* suggest articles about paying invoices and service providers; it is the most concentrated topic (top 10 words hold 52.1%).
+* **Overall:** with only ten articles each topic dominates one to three documents, so the topics are broadly interpretable but not very stable. Day and month words (*tuesday*, *monday*, *july*) and *gov* are noise that could be added to the stop-word list, and a larger corpus would give more reliable topics.
